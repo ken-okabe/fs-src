@@ -1,4 +1,4 @@
-// 4-Hardware/1-IF2Operations.fs
+// src/4-Hardware/1-IF2Operations.fs
 namespace E8.Hardware
 
 open System
@@ -74,4 +74,39 @@ and MemoryStatus = {
     PoolSize: int64
     PinnedMemory: int64 option
 }
- 
+
+/// ハードウェア操作のヘルパー関数
+module HardwareUtils =
+
+    /// BitBlock64配列をuint64配列に変換
+    let inline bitBlocksToUInt64Array (blocks: BitBlock64[]) : uint64[] =
+        Array.map (fun (b: BitBlock64) -> b.Bits) blocks
+
+    /// uint64配列をBitBlock64配列に変換
+    let inline uint64ArrayToBitBlocks (arr: uint64[]) : BitBlock64[] =
+        Array.map (fun bits -> { Bits = bits }) arr
+
+    /// 行列サイズからワード数を計算
+    let inline computeMatrixWords (rows: int) (cols: int) : int =
+        let wordsPerRow = (cols + 63) / 64
+        rows * wordsPerRow
+
+    /// デバイス選択ヒューリスティック
+    let selectOptimalDevice (matrixSize: int) (availableDevices: DeviceCapabilities list) =
+        match availableDevices with
+        | [] -> failwith "No compute devices available"
+        | [single] -> single
+        | devices ->
+            // 簡単なヒューリスティック: 大きい行列はGPU、小さい行列はCPU
+            if matrixSize > 1024 * 1024 then
+                devices |> List.tryFind (fun d ->
+                    match d.DeviceType with
+                    | GPU _ -> true
+                    | _ -> false)
+                |> Option.defaultValue devices.[0]
+            else
+                devices |> List.tryFind (fun d ->
+                    match d.DeviceType with
+                    | CPU _ -> true
+                    | _ -> false)
+                |> Option.defaultValue devices.[0]

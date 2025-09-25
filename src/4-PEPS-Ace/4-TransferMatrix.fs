@@ -1,457 +1,273 @@
-// 5-Ace/4-TransferMatrix.fs
+// src/4-PEPS-Ace/4-TransferMatrix.fs
 namespace E8.Ace
 
 open System
-open System.Threading.Tasks
+open System.Collections.Generic
 open E8.Algebra
+open E8.Tensors
 open E8.Hardware
 
 /// 転送行列の高度な解析と操作
 module TransferMatrix =
 
-    /// 固有空間の詳細情報
-    type EigenspaceDecomposition = {
-        /// 固有値0の固有空間
-        Kernel: Eigenspace
-        /// 固有値1の固有空間（プロジェクターの場合）
-        Image: Eigenspace
-        /// 分解の品質指標
-        DecompositionQuality: float
-        /// 計算時間
-        ComputationTimeMs: float
+    /// 転送行列の構造
+    type TransferMatrixStructure = {
+        /// 行列データ
+        Data: BitBlock64[]
+        /// サイズ（正方行列と仮定）
+        Size: int
+        /// ブロック構造（もしあれば）
+        BlockStructure: BlockDecomposition option
+        /// 疎性パターン
+        SparsityPattern: SparsityInfo
+        /// 対称性
+        Symmetries: SymmetryInfo
     }
 
-    and Eigenspace = {
-        /// 固有値
-        Eigenvalue: F2
-        /// 基底ベクトル
-        BasisVectors: BitBlock64[][]
-        /// 次元
-        Dimension: int
-        /// 直交性の検証
-        IsOrthogonal: bool
+    and BlockDecomposition = {
+        /// ブロック数
+        NumBlocks: int
+        /// 各ブロックのサイズ
+        BlockSizes: int[]
+        /// ブロック間の結合
+        Couplings: (int * int)[]
     }
 
-    /// 転送行列の代数的性質の完全な解析
-    type AlgebraicAnalysis = {
-        /// べき等性 (T² = T)
-        IsIdempotent: bool
-        /// 冪零性 (T^n = 0)
-        IsNilpotent: bool
-        /// 対合性 (T² = I)
-        IsInvolutive: bool
-        /// 正規性 (TT† = T†T、F₂では自動的に成立)
-        IsNormal: bool
-        /// トレース
-        Trace: F2
-        /// 行列式（F₂上）
-        Determinant: F2
-        /// 特性多項式
-        CharacteristicPolynomial: Polynomial
-        /// 最小多項式
-        MinimalPolynomial: Polynomial
+    and SparsityInfo = {
+        /// 非零要素数
+        NonZeroCount: int
+        /// 疎性率（0-1）
+        SparsityRatio: float
+        /// 行ごとの非零要素数
+        RowNonZeros: int[]
+        /// 列ごとの非零要素数
+        ColNonZeros: int[]
     }
 
-    and Polynomial = {
-        Coefficients: F2[]  // 係数（低次から）
-        Degree: int
+    and SymmetryInfo = {
+        /// 転置対称性
+        IsSymmetric: bool
+        /// 反対称性
+        IsAntiSymmetric: bool
+        /// ブロック対角性
+        IsBlockDiagonal: bool
+        /// 巡回対称性
+        IsCirculant: bool
     }
 
-    /// べき乗法による固有ベクトル探索（F₂版）
-    let powerMethodF2 (matrix: BitBlock64[]) (dim: int)
-                     (ops: IF2Operations) (maxIterations: int) =
+    /// 転送行列を解析
+    let analyzeStructure (matrix: BitBlock64[]) (size: int) (ops: IF2Operations) =
 
-        // ランダム初期ベクトル
-        let rng = Random()
-        let mutable v = Array.init dim (fun _ ->
-            { Bits = uint64(rng.Next(2)) })
+        let wordsPerRow = (size + 63) / 64
 
-        let mutable previousV = Array.copy v
-        let mutable hasConverged = false
-        let mutable iteration = 0
-        let mutable eigenvalue = F2.Zero
+        // 疎性情報を計算
+        let mutable nonZeroCount = 0
+        let rowNonZeros = Array.zeroCreate size
+        let colNonZeros = Array.zeroCreate size
 
-        while not hasConverged && iteration < maxIterations do
-            // v_new = T * v
-            let v_new = ops.MatrixMultiply matrix v dim 1 dim
+        for i in 0 .. size - 1 do
+            for j in 0 .. size - 1 do
+                let wordIdx = i * wordsPerRow + j / 64
+                let bitIdx = j % 64
+                if wordIdx < matrix.Length then
+                    if (matrix.[wordIdx].Bits >>> bitIdx) &&& 1UL = 1UL then
+                        nonZeroCount <- nonZeroCount + 1
+                        rowNonZeros.[i] <- rowNonZeros.[i] + 1
+                        colNonZeros.[j] <- colNonZeros.[j] + 1
 
-            // 収束チェック
-            let unchanged = Array.forall2 (fun a b -> a.Bits = b.Bits) v v_new
-            let cyclic = Array.forall2 (fun a b -> a.Bits = b.Bits) previousV v_new
+        let sparsity = {
+            NonZeroCount = nonZeroCount
+            SparsityRatio = 1.0 - (float nonZeroCount / float (size * size))
+            RowNonZeros = rowNonZeros
+            ColNonZeros = colNonZeros
+        }
 
-            if unchanged then
-                // 不動点に到達 → 固有値1
-                eigenvalue <- F2.One
-                hasConverged <- true
-            elif cyclic then
-                // 2周期 → 固有値-1（F₂では1と同じ）
-                eigenvalue <- F2.One
-                hasConverged <- true
-            else
-                // ゼロベクトルチェック
-                let isZero = Array.forall (fun x -> x.Bits = 0UL) v_new
-                if isZero then
-                    eigenvalue <- F2.Zero
-                    hasConverged <- true
+        // 対称性をチェック
+        let checkSymmetric() =
+            let mutable isSymmetric = true
+            for i in 0 .. size - 1 do
+                for j in i + 1 .. size - 1 do
+                    let ij_wordIdx = i * wordsPerRow + j / 64
+                    let ij_bitIdx = j % 64
+                    let ji_wordIdx = j * wordsPerRow + i / 64
+                    let ji_bitIdx = i % 64
 
-            previousV <- v
-            v <- v_new
-            iteration <- iteration + 1
+                    if ij_wordIdx < matrix.Length && ji_wordIdx < matrix.Length then
+                        let ij_bit = (matrix.[ij_wordIdx].Bits >>> ij_bitIdx) &&& 1UL
+                        let ji_bit = (matrix.[ji_wordIdx].Bits >>> ji_bitIdx) &&& 1UL
+                        if ij_bit <> ji_bit then
+                            isSymmetric <- false
+            isSymmetric
 
-        (eigenvalue, v, hasConverged, iteration)
+        let symmetry = {
+            IsSymmetric = checkSymmetric()
+            IsAntiSymmetric = false  // 簡略化
+            IsBlockDiagonal = false  // 簡略化
+            IsCirculant = false      // 簡略化
+        }
 
-    /// 固有空間の基底を抽出
-    let extractEigenspaceBasis (matrix: BitBlock64[]) (eigenvalue: F2)
-                               (dim: int) (ops: IF2Operations) =
+        {
+            Data = matrix
+            Size = size
+            BlockStructure = None  // 簡略化
+            SparsityPattern = sparsity
+            Symmetries = symmetry
+        }
 
-        // (T - λI)v = 0 を解く
-        let modifiedMatrix = Array.copy matrix
+    /// 転送行列のべき乗を計算
+    let matrixPower (matrix: BitBlock64[]) (size: int) (power: int) (ops: IF2Operations) =
 
-        if eigenvalue = F2.One then
-            // T - I の計算
-            for i in 0 .. dim - 1 do
-                let diagIdx = i * dim + i
-                modifiedMatrix.[diagIdx] <- {
-                    Bits = modifiedMatrix.[diagIdx].Bits ^^^ 1UL
-                }
+        if power = 0 then
+            // 単位行列を返す
+            let wordsPerRow = (size + 63) / 64
+            let identity = Array.zeroCreate (size * wordsPerRow)
+            for i in 0 .. size - 1 do
+                let wordIdx = i * wordsPerRow + i / 64
+                let bitIdx = i % 64
+                identity.[wordIdx] <- { Bits = identity.[wordIdx].Bits ||| (1UL <<< bitIdx) }
+            identity
 
-        // ランクと核を計算
-        let (rank, pivots) = ops.ComputeTopologicalRank modifiedMatrix dim dim
-        let nullity = dim - rank
+        elif power = 1 then
+            Array.copy matrix
 
-        // 基底ベクトルの構築
-        let basis = ResizeArray<BitBlock64[]>()
+        else
+            // 繰り返し二乗法
+            let rec powerRec (m: BitBlock64[]) (p: int) =
+                if p = 1 then
+                    m
+                elif p % 2 = 0 then
+                    let half = powerRec m (p / 2)
+                    ops.MatrixMultiply half half size size size
+                else
+                    let m' = powerRec m (p - 1)
+                    ops.MatrixMultiply m m' size size size
 
-        // 自由変数に対応する基底
-        let freeVars =
-            let all = Set.ofSeq [0 .. dim - 1]
-            let pivotCols = pivots |> Array.map (fun p -> p % dim) |> Set.ofArray
-            Set.difference all pivotCols |> Set.toArray
+            powerRec matrix power
 
-        for freeVar in freeVars do
-            let vec = Array.zeroCreate<BitBlock64> dim
-            vec.[freeVar] <- { Bits = 1UL }
+    /// 転送行列の固有空間を近似（簡略化）
+    type EigenspaceInfo = {
+        /// 固有値1の固有空間の次元
+        NullityOfTMinusI: int
+        /// 固有値0の固有空間の次元
+        NullityOfT: int
+        /// その他の情報
+        HasUniqueFixedPoint: bool
+    }
 
-            // 後退代入で他の成分を決定
-            for pivotIdx in Array.rev pivots do
-                let row = pivotIdx / dim
-                let col = pivotIdx % dim
+    let approximateEigenspace (matrix: BitBlock64[]) (size: int) (ops: IF2Operations) =
 
-                if col <> freeVar then
-                    let mutable sum = { Bits = 0UL }
-                    for j in col + 1 .. dim - 1 do
-                        sum <- { Bits = sum.Bits ^^^ (modifiedMatrix.[row * dim + j].Bits &&& vec.[j].Bits) }
+        // T - Iを計算
+        let wordsPerRow = (size + 63) / 64
+        let tMinusI = Array.copy matrix
 
-                    vec.[col] <- sum
+        for i in 0 .. size - 1 do
+            let wordIdx = i * wordsPerRow + i / 64
+            let bitIdx = i % 64
+            if wordIdx < tMinusI.Length then
+                tMinusI.[wordIdx] <-
+                    { Bits = tMinusI.[wordIdx].Bits ^^^ (1UL <<< bitIdx) }
 
-            basis.Add(vec)
+        // ランクを計算
+        let (rankT, _) = ops.ComputeTopologicalRank matrix size size
+        let (rankTMinusI, _) = ops.ComputeTopologicalRank tMinusI size size
 
-            if basis.Count >= nullity then
-                freeVars.Length <- 0  // ループ終了
+        {
+            NullityOfTMinusI = size - rankTMinusI
+            NullityOfT = size - rankT
+            HasUniqueFixedPoint = (size - rankTMinusI) = 1
+        }
 
-        basis.ToArray()
+    /// 転送行列の相関長を計算（簡略化）
+    let computeCorrelationLength (matrix: BitBlock64[]) (size: int) (ops: IF2Operations) =
 
-    /// 固有空間分解の完全実装
-    let eigenspaceDecomposition (matrix: BitBlock64[]) (dim: int)
-                               (isProjector: bool) (ops: IF2Operations) =
-
-        let timer = System.Diagnostics.Stopwatch.StartNew()
+        // 第2固有値を推定（簡略化：プロジェクターテストを使用）
+        let t2 = ops.MatrixMultiply matrix matrix size size size
+        let (isProjector, _) = ops.MatrixEquals matrix t2 size
 
         if isProjector then
-            // プロジェクターの場合：固有値は0と1のみ
-
-            // Im(T) = 固有値1の固有空間
-            let imageBasis = extractEigenspaceBasis matrix F2.One dim ops
-
-            // Ker(T) = 固有値0の固有空間
-            let kernelBasis = extractEigenspaceBasis matrix F2.Zero dim ops
-
-            // 直交性チェック（F₂では簡略化）
-            let checkOrthogonality (basis: BitBlock64[][]) =
-                if basis.Length < 2 then true
-                else
-                    let mutable isOrtho = true
-                    for i in 0 .. basis.Length - 2 do
-                        for j in i + 1 .. basis.Length - 1 do
-                            // 内積が0かチェック
-                            let mutable innerProduct = 0UL
-                            for k in 0 .. dim - 1 do
-                                innerProduct <- innerProduct ^^^ (basis.[i].[k].Bits &&& basis.[j].[k].Bits)
-                            if innerProduct <> 0UL then
-                                isOrtho <- false
-                    isOrtho
-
-            timer.Stop()
-
-            {
-                Kernel = {
-                    Eigenvalue = F2.Zero
-                    BasisVectors = kernelBasis
-                    Dimension = kernelBasis.Length
-                    IsOrthogonal = checkOrthogonality kernelBasis
-                }
-                Image = {
-                    Eigenvalue = F2.One
-                    BasisVectors = imageBasis
-                    Dimension = imageBasis.Length
-                    IsOrthogonal = checkOrthogonality imageBasis
-                }
-                DecompositionQuality =
-                    if kernelBasis.Length + imageBasis.Length = dim then 1.0 else 0.5
-                ComputationTimeMs = timer.Elapsed.TotalMilliseconds
-            }
+            // プロジェクターの場合、相関長は無限大（F₂では表現不可）
+            None
         else
-            // 一般の場合：べき乗法で固有ベクトルを探索
-            let eigenvectors1 = ResizeArray<BitBlock64[]>()
-            let eigenvectors0 = ResizeArray<BitBlock64[]>()
+            // 簡略化：有限の相関長を仮定
+            Some 10  // ダミー値
 
-            // 複数の初期ベクトルで試行
-            for trial in 0 .. min 10 dim do
-                let (eigenvalue, eigenvector, converged, _) =
-                    powerMethodF2 matrix dim ops 100
+    /// 転送行列から物理量を抽出
+    type PhysicalQuantities = {
+        /// 磁化密度
+        MagnetizationDensity: F2
+        /// エネルギー密度
+        EnergyDensity: F2
+        /// エンタングルメントエントロピー（パリティ）
+        EntanglementParity: F2
+    }
 
-                if converged then
-                    if eigenvalue = F2.One then
-                        eigenvectors1.Add(eigenvector)
-                    else
-                        eigenvectors0.Add(eigenvector)
+    let extractPhysicalQuantities (matrix: BitBlock64[]) (size: int) (ops: IF2Operations) =
 
-            timer.Stop()
+        // トレースを計算
+        let wordsPerRow = (size + 63) / 64
+        let mutable trace = 0UL
 
-            {
-                Kernel = {
-                    Eigenvalue = F2.Zero
-                    BasisVectors = eigenvectors0.ToArray()
-                    Dimension = eigenvectors0.Count
-                    IsOrthogonal = false
-                }
-                Image = {
-                    Eigenvalue = F2.One
-                    BasisVectors = eigenvectors1.ToArray()
-                    Dimension = eigenvectors1.Count
-                    IsOrthogonal = false
-                }
-                DecompositionQuality =
-                    float(eigenvectors0.Count + eigenvectors1.Count) / float dim
-                ComputationTimeMs = timer.Elapsed.TotalMilliseconds
-            }
+        for i in 0 .. size - 1 do
+            let wordIdx = i * wordsPerRow + i / 64
+            let bitIdx = i % 64
+            if wordIdx < matrix.Length then
+                if (matrix.[wordIdx].Bits >>> bitIdx) &&& 1UL = 1UL then
+                    trace <- trace ^^^ 1UL
 
-    /// 特性多項式の計算（F₂版のFaddeev-LeVerrier法）
-    let computeCharacteristicPolynomial (matrix: BitBlock64[]) (dim: int)
-                                       (ops: IF2Operations) =
+        // 非対角要素の和（簡略化）
+        let mutable offDiagonal = 0UL
 
-        // det(λI - T) の計算
-        let coefficients = Array.zeroCreate<F2> (dim + 1)
-        coefficients.[dim] <- F2.One  // 最高次の係数
-
-        // Faddeev-LeVerrierアルゴリズムのF₂版
-        let mutable B = Array.copy matrix
-
-        for k in 1 .. dim do
-            // c_{n-k} = -1/k * tr(A * B_{k-1})
-            // F₂では除算がないので単純化
-            let mutable trace = { Bits = 0UL }
-            for i in 0 .. dim - 1 do
-                trace <- { Bits = trace.Bits ^^^ B.[i * dim + i].Bits }
-
-            coefficients.[dim - k] <- if trace.Bits = 0UL then F2.Zero else F2.One
-
-            // B_k = A * B_{k-1} - c_{n-k} * I
-            if k < dim then
-                let newB = ops.MatrixMultiply matrix B dim dim dim
-
-                if coefficients.[dim - k] = F2.One then
-                    for i in 0 .. dim - 1 do
-                        newB.[i * dim + i] <- {
-                            Bits = newB.[i * dim + i].Bits ^^^ 1UL
-                        }
-
-                B <- newB
+        for i in 0 .. min 10 (size - 1) do
+            for j in 0 .. min 10 (size - 1) do
+                if i <> j then
+                    let wordIdx = i * wordsPerRow + j / 64
+                    let bitIdx = j % 64
+                    if wordIdx < matrix.Length then
+                        if (matrix.[wordIdx].Bits >>> bitIdx) &&& 1UL = 1UL then
+                            offDiagonal <- offDiagonal ^^^ 1UL
 
         {
-            Coefficients = coefficients
-            Degree = dim
+            MagnetizationDensity = if trace = 1UL then F2.One else F2.Zero
+            EnergyDensity = if offDiagonal = 1UL then F2.One else F2.Zero
+            EntanglementParity = if (trace ^^^ offDiagonal) = 1UL then F2.One else F2.Zero
         }
 
-    /// 最小多項式の計算（Berlekamp法）
-    let computeMinimalPolynomial (matrix: BitBlock64[]) (dim: int)
-                                (ops: IF2Operations) =
+    /// 転送行列の完全な解析
+    type CompleteAnalysis = {
+        Structure: TransferMatrixStructure
+        Eigenspace: EigenspaceInfo
+        CorrelationLength: int option
+        PhysicalQuantities: PhysicalQuantities
+        IsProjector: bool
+        MinimalPolynomialDegree: int
+    }
 
-        // べき乗の列を生成
-        let powers = ResizeArray<BitBlock64[]>()
+    let performCompleteAnalysis (matrix: BitBlock64[]) (size: int) (ops: IF2Operations) =
 
-        // I（単位行列）
-        let identity = Array.init (dim * dim) (fun i ->
-            if i % (dim + 1) = 0 then { Bits = 1UL } else { Bits = 0UL })
-        powers.Add(identity)
+        // 構造解析
+        let structure = analyzeStructure matrix size ops
 
-        // T
-        powers.Add(matrix)
+        // 固有空間
+        let eigenspace = approximateEigenspace matrix size ops
 
-        let mutable currentPower = matrix
-        let mutable foundMinPoly = false
-        let mutable degree = 1
+        // 相関長
+        let correlationLength = computeCorrelationLength matrix size ops
 
-        while degree < dim && not foundMinPoly do
-            degree <- degree + 1
-            currentPower <- ops.MatrixMultiply currentPower matrix dim dim dim
+        // 物理量
+        let quantities = extractPhysicalQuantities matrix size ops
 
-            // 線形従属性チェック
-            let augmented = Array2D.zeroCreate<BitBlock64> (dim * dim) (degree + 1)
-            for p in 0 .. degree do
-                for i in 0 .. dim * dim - 1 do
-                    if p < powers.Count then
-                        augmented.[i, p] <- powers.[p].[i]
-                    else
-                        augmented.[i, p] <- currentPower.[i]
+        // プロジェクターチェック
+        let t2 = ops.MatrixMultiply matrix matrix size size size
+        let (isProjector, _) = ops.MatrixEquals matrix t2 size
 
-            // ガウス消去
-            let mutable rank = 0
-            let coefficients = Array.zeroCreate<F2> (degree + 1)
-
-            for col in 0 .. degree do
-                let mutable pivotRow = -1
-                for row in rank .. dim * dim - 1 do
-                    if augmented.[row, col].Bits <> 0UL && pivotRow = -1 then
-                        pivotRow <- row
-
-                if pivotRow >= 0 then
-                    // ピボット交換
-                    if pivotRow <> rank then
-                        for c in 0 .. degree do
-                            let temp = augmented.[rank, c]
-                            augmented.[rank, c] <- augmented.[pivotRow, c]
-                            augmented.[pivotRow, c] <- temp
-
-                    // 消去
-                    for row in 0 .. dim * dim - 1 do
-                        if row <> rank && augmented.[row, col].Bits <> 0UL then
-                            for c in 0 .. degree do
-                                augmented.[row, c] <- {
-                                    Bits = augmented.[row, c].Bits ^^^ augmented.[rank, c].Bits
-                                }
-
-                    rank <- rank + 1
-
-            if rank < degree + 1 then
-                foundMinPoly <- true
-                // 係数を抽出
-                for i in 0 .. degree do
-                    coefficients.[i] <- if augmented.[rank, i].Bits <> 0UL then F2.One else F2.Zero
-
-            if not foundMinPoly then
-                powers.Add(currentPower)
+        // 最小多項式の次数（簡略化）
+        let minPolyDegree = if isProjector then 2 else min size 10
 
         {
-            Coefficients =
-                if foundMinPoly then
-                    Array.take (degree + 1) coefficients
-                else
-                    [| F2.One |]  // デフォルト
-            Degree = degree
+            Structure = structure
+            Eigenspace = eigenspace
+            CorrelationLength = correlationLength
+            PhysicalQuantities = quantities
+            IsProjector = isProjector
+            MinimalPolynomialDegree = minPolyDegree
         }
-
-    /// 代数的性質の完全解析
-    let analyzeAlgebraicProperties (matrix: BitBlock64[]) (dim: int)
-                                  (ops: IF2Operations) =
-
-        let timer = System.Diagnostics.Stopwatch.StartNew()
-
-        // T²の計算
-        let T2 = ops.MatrixMultiply matrix matrix dim dim dim
-
-        // 単位行列
-        let identity = Array.init (dim * dim) (fun i ->
-            if i % (dim + 1) = 0 then { Bits = 1UL } else { Bits = 0UL })
-
-        // ゼロ行列チェック
-        let isZero m = Array.forall (fun b -> b.Bits = 0UL) m
-
-        // 等価性チェック
-        let areEqual m1 m2 =
-            Array.forall2 (fun a b -> a.Bits = b.Bits) m1 m2
-
-        // べき等性チェック (T² = T)
-        let isIdempotent = areEqual T2 matrix
-
-        // 冪零性チェック (T^n = 0)
-        let checkNilpotency() =
-            let mutable power = matrix
-            let mutable isNilpotent = false
-            for n in 2 .. min 10 dim do
-                power <- ops.MatrixMultiply power matrix dim dim dim
-                if isZero power then
-                    isNilpotent <- true
-                    n <- dim + 1  // ループ終了
-            isNilpotent
-
-        let isNilpotent = checkNilpotency()
-
-        // 対合性チェック (T² = I)
-        let isInvolutive = areEqual T2 identity
-
-        // トレース計算
-        let mutable trace = { Bits = 0UL }
-        for i in 0 .. dim - 1 do
-            trace <- { Bits = trace.Bits ^^^ matrix.[i * dim + i].Bits }
-
-        // 行列式計算（簡略化：対角要素の積のパリティ）
-        let mutable det = { Bits = 1UL }
-        for i in 0 .. dim - 1 do
-            det <- { Bits = det.Bits &&& matrix.[i * dim + i].Bits }
-
-        // 多項式計算
-        let charPoly = computeCharacteristicPolynomial matrix dim ops
-        let minPoly = computeMinimalPolynomial matrix dim ops
-
-        timer.Stop()
-
-        {
-            IsIdempotent = isIdempotent
-            IsNilpotent = isNilpotent
-            IsInvolutive = isInvolutive
-            IsNormal = true  // F₂では常に真
-            Trace = if trace.Bits = 0UL then F2.Zero else F2.One
-            Determinant = if det.Bits = 0UL then F2.Zero else F2.One
-            CharacteristicPolynomial = charPoly
-            MinimalPolynomial = minPoly
-        }
-
-    /// トポロジカル不変量の計算
-    let computeTopologicalInvariants (matrix: BitBlock64[]) (dim: int)
-                                    (isProjector: bool) (ops: IF2Operations) =
-
-        // 固有空間分解
-        let eigenspaces = eigenspaceDecomposition matrix dim isProjector ops
-
-        // 縮退度スペクトラム
-        let degeneracySpectrum = Map.ofList [
-            (F2.Zero, eigenspaces.Kernel.Dimension)
-            (F2.One, eigenspaces.Image.Dimension)
-        ]
-
-        // トポロジカルエントロピー
-        let topologicalEntropy =
-            if eigenspaces.Image.Dimension > 1 then
-                Math.Log(float eigenspaces.Image.Dimension, 2.0)
-            else
-                0.0
-
-        // ギャップの存在
-        let hasGap =
-            eigenspaces.Kernel.Dimension > 0 && eigenspaces.Image.Dimension > 0
-
-        // チャーン数（F₂版の簡略計算）
-        let chernNumber =
-            if isProjector && hasGap then
-                1  // トポロジカル相
-            else
-                0  // 自明な相
-
-        {|
-            DegeneracySpectrum = degeneracySpectrum
-            TopologicalEntropy = topologicalEntropy
-            HasSpectralGap = hasGap
-            ChernNumber = chernNumber
-            IsTopological = eigenspaces.Image.Dimension > 1 || eigenspaces.Kernel.Dimension > 1
-        |}

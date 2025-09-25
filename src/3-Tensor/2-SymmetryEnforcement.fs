@@ -1,7 +1,8 @@
-// 3-SymmetryEnforcement.fs
+// 2-SymmetryEnforcement.fs
 // Enforcement and verification of physical symmetries
 namespace E8.TensorConstruction
 
+open System.Collections.Generic
 open E8.Algebra
 open E8.Tensors
 

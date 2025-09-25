@@ -3,6 +3,7 @@
 namespace E8.QuantumAlgebra
 
 open System
+open System.Numerics
 open E8.Algebra
 open E8.QuantumAlgebra.GoldenRatio
 open E8.QuantumAlgebra.FibonacciFusion
@@ -95,7 +96,7 @@ module FSymbols =
     /// Verifies the Pentagon equation for a specific set of anyons
     /// (F^g_{klm})_pq (F^g_{ijq})_mn = Σ_r (F^k_{ijl})_mr (F^g_{irm})_ln (F^l_{jkn})_rq
     let verifyPentagonForAnyons (i: AnyonType) (j: AnyonType) (k: AnyonType)
-                                (l: AnyonType) (m: AnyonType) (n: AnyonType)
+                               (l: AnyonType) (m: AnyonType) (n: AnyonType)
                                 (g: AnyonType) : bool =
         let mutable leftSum = (BigInteger.Zero, BigInteger.Zero)
         let mutable rightSum = (BigInteger.Zero, BigInteger.Zero)
@@ -241,7 +242,7 @@ module FSymbols =
             false
 
     /// Creates the F-matrix as a linear operator for fixed (a,b,c,d)
-    let createFMatrix (a: AnyonType) (b: AnyonType) (c: AnyonType) (d: AnyonType) : MatrixF2 =
+    let createFMatrix (a: AnyonType) (b: AnyonType) (c: AnyonType) (d: AnyonType) : E8.Tensors.MatrixF2 =
         // Count valid intermediate channels
         let mutable validE = []
         let mutable validF = []
@@ -258,9 +259,9 @@ module FSymbols =
         let dimF = validF.Length
 
         if dimE = 0 || dimF = 0 then
-            MatrixF2(1, 1)  // Return trivial matrix if no valid channels
+            E8.Tensors.MatrixF2(1, 1)  // Return trivial matrix if no valid channels
         else
-            let matrix = MatrixF2(dimE, dimF)
+            let matrix = E8.Tensors.MatrixF2(dimE, dimF)
 
             for i, e in List.indexed (List.rev validE) do
                 for j, f in List.indexed (List.rev validF) do

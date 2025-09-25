@@ -75,8 +75,8 @@ module FibonacciFusion =
         ]
 
     /// Fusion matrix for a fixed anyon 'a': (N_a)_bc = N^c_{ab}
-    let fusionMatrix (a: AnyonType) : MatrixF2 =
-        let matrix = MatrixF2(2, 2)
+    let fusionMatrix (a: AnyonType) : E8.Tensors.MatrixF2 =
+        let matrix = E8.Tensors.MatrixF2(2, 2)
         for b in 0..1 do
             for c in 0..1 do
                 let b_anyon = AnyonType.FromInt b
@@ -86,16 +86,16 @@ module FibonacciFusion =
 
     /// Quantum dimension of an anyon (largest eigenvalue of fusion matrix)
     /// For Fibonacci anyons: d_1 = 1, d_τ = φ (golden ratio)
-    let quantumDimension (a: AnyonType) : (BigInteger * BigInteger) =
+    let quantumDimension (a: AnyonType) : (System.Numerics.BigInteger * System.Numerics.BigInteger) =
         match a with
-        | Vacuum -> (BigInteger.Zero, BigInteger.One)  // Represents 1
-        | Tau -> (BigInteger.One, BigInteger.Zero)     // Represents φ
+        | Vacuum -> (System.Numerics.BigInteger.Zero, System.Numerics.BigInteger.One)  // Represents 1
+        | Tau -> (System.Numerics.BigInteger.One, System.Numerics.BigInteger.Zero)     // Represents φ
 
     /// Total quantum dimension D = √(Σ d_a²)
     /// For Fibonacci: D² = 1² + φ² = 1 + (φ + 1) = φ + 2
-    let totalQuantumDimensionSquared() : (BigInteger * BigInteger) =
+    let totalQuantumDimensionSquared() : (System.Numerics.BigInteger * System.Numerics.BigInteger) =
         // 1² + φ² = 1 + (φ + 1) = φ + 2
-        (BigInteger.One, BigInteger 2)
+        (System.Numerics.BigInteger.One, System.Numerics.BigInteger 2)
 
     /// Validates the fusion algebra is associative
     let validateAssociativity() : bool =
@@ -127,13 +127,13 @@ module FibonacciFusion =
 
     /// Computes the S-matrix element S_ab (modular S-matrix)
     /// For Fibonacci anyons, this involves the quantum dimensions
-    let sMatrixElement (a: AnyonType) (b: AnyonType) : (BigInteger * BigInteger) =
+    let sMatrixElement (a: AnyonType) (b: AnyonType) : (System.Numerics.BigInteger * System.Numerics.BigInteger) =
         // S_ab = (1/D) Σ_c N^c_{ab} d_c
         // This is a simplified version; full calculation requires more algebra
         match (a, b) with
-        | (Vacuum, Vacuum) -> (BigInteger.One, BigInteger.Zero)  // Simplified
-        | (Vacuum, Tau) | (Tau, Vacuum) -> (BigInteger.One, BigInteger.Zero)
-        | (Tau, Tau) -> (BigInteger.MinusOne, BigInteger.Zero)  // Simplified
+        | (Vacuum, Vacuum) -> (System.Numerics.BigInteger.One, System.Numerics.BigInteger.Zero)  // Simplified
+        | (Vacuum, Tau) | (Tau, Vacuum) -> (System.Numerics.BigInteger.One, System.Numerics.BigInteger.Zero)
+        | (Tau, Tau) -> (System.Numerics.BigInteger.MinusOne, System.Numerics.BigInteger.Zero)  // Simplified
 
     /// Verifies the fusion rules satisfy physical constraints
     let verifyFusionRules() : bool =
