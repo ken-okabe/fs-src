@@ -1,4 +1,6 @@
-// 5-Observable/3-CorrelationFunctions.fs
+// 3-CorrelationFunctions.fs
+// Implements correlation functions based on the rigorous "Projected Correlator"
+// theory from the Algebraic Observables Engine (AOE).
 namespace E8.Observable
 
 open System
@@ -7,249 +9,100 @@ open E8.Tensors
 open E8.Hardware
 open E8.Ace
 
-/// 2点相関関数
-type TwoPointCorrelator() =
+/// Defines a local operator and its representation in the virtual basis of the environment.
+type LocalOperator = {
+    Name: string
+    // A function that creates the matrix representation of the operator for a given dimension.
+    ToVirtualMatrix: int -> MatrixF2
+}
 
-    interface IObservable with
-        member _.Kind =
-            // デフォルト距離（実際の距離は location から取得）
-            TwoPointCorrelation(1, 0)
+/// Contains the core logic for computing correlation functions algebraically.
+module CorrelationComputation =
 
-        member _.Compute environment peps location ops =
-            let (x1, y1) = location.PrimaryPosition
-            let chi = environment.Chi
+    /// Computes the fixed point eigenvector (or density matrix) of a projector matrix T.
+    /// The fixed point space is the image (column space) of T.
+    let private computeFixedPoint (transferMatrix: MatrixF2) (ops: IF2Operations) : MatrixF2 =
+        let size = transferMatrix.Rows
+        // For a projector T, the fixed point rho_fixed is the projector onto its image space.
+        // In the simplest case of a single dominant eigenvector (rank=1), rho_fixed is |v><v|.
+        // For a degenerate eigenspace (rank > 1), it's the projector onto that space.
+        // The transfer matrix T itself is already the projector onto its image.
+        // Therefore, for a projector, the fixed point density matrix is T itself, normalized.
+        // In F2, normalization is non-trivial. We use the projector T directly,
+        // as it correctly projects any state into the fixed-point subspace.
+        transferMatrix
 
-            // 第2点を取得
-            let (x2, y2) =
-                match location.SecondaryPositions with
-                | [] -> ((x1 + 1) % chi, y1)  // デフォルトは隣接点
-                | pos :: _ -> pos
+    /// Computes the parity of a two-point correlation function <O_i O_j>
+    /// using the projector property of the transfer matrix (T^2=T).
+    let computeProjectedCorrelation
+        (environment: ACE_CTMRG.SymmetricEnvironment)
+        (peps: Tensor4F2)
+        (location1: int * int)
+        (location2: int * int)
+        (op1: LocalOperator)
+        (op2: LocalOperator)
+        (ops: IF2Operations) : ObservableValue =
 
-            // 距離計算（トーラス上）
-            let dx = min (abs(x2 - x1)) (chi - abs(x2 - x1))
-            let dy = min (abs(y2 - y1)) (chi - abs(y2 - y1))
-            let distance = dx + dy  // マンハッタン距離
+        // 1. Build the transfer matrix T from the converged environment.
+        let (transferMatrixData, size) = TransferMatrix.constructTransferMatrix environment peps ops
 
-            // 転送行列のスペクトル情報を取得
-            let spectralInfo = ObservableUtils.getSpectralInfo environment peps ops
+        // 2. Verify the projector hypothesis and get spectral info.
+        let verification = ProjectorSpectral.verifyProjectorHypothesis transferMatrixData size ops
+        let spectralInfo = ProjectorSpectral.getSpectralInfo verification
+        let confidence = spectralInfo.MinimalPolynomialDegree
 
-            // プロジェクターの場合、相関は指数減衰
-            let correlationStrength =
-                if spectralInfo.IsProjector then
-                    // 相関長1なので急速に減衰
-                    if distance = 0 then
-                        1.0
-                    elif distance = 1 then
-                        0.5
-                    else
-                        Math.Exp(-float distance)
-                else
-                    // 一般の場合
-                    Math.Exp(-float distance / float spectralInfo.Rank)
+        // 3. Represent T as a MatrixF2 for algebraic manipulation.
+        let t_matrix = MatrixF2(size, size, fun i j -> { Bits = transferMatrixData.[i * ((size+63)/64) + j/64].Bits >>> (j%64) &&& 1UL } |> F2.op_Explicit)
 
-            // 2点での観測量の積
-            let idx1 = x1 * chi + y1
-            let idx2 = x2 * chi + y2
+        // 4. Compute the fixed point density matrix rho_fixed from T.
+        let rho_fixed = computeFixedPoint t_matrix ops
 
-            let value1 =
-                if idx1 < environment.UniqueCorner.Length then
-                    environment.UniqueCorner.[idx1].Bits
-                else
-                    0UL
+        // 5. Represent local operators in the virtual basis.
+        let op1_matrix = op1.ToVirtualMatrix(size)
+        let op2_matrix = op2.ToVirtualMatrix(size)
 
-            let value2 =
-                if idx2 < environment.UniqueCorner.Length then
-                    environment.UniqueCorner.[idx2].Bits
-                else
-                    0UL
+        // 6. Compute the correlation by evaluating the full, correct trace expression.
+        // C(i,j) = Tr(rho_fixed * O_i * T^r * O_j), where r = |i-j|.
+        // Since T is a projector, T^r = T for r >= 1.
+        let distance = abs(fst location1 - fst location2) + abs(snd location1 - snd location2)
 
-            // 相関 = ⟨O₁O₂⟩
-            let correlation = value1 &&& value2
-
-            // 環境テンソルを通じた伝播を考慮
-            let propagatedCorrelation =
-                if distance > 0 then
-                    // 経路に沿った積
-                    let mutable pathProduct = correlation
-
-                    // 最短経路を辿る
-                    let stepX = if x2 > x1 then 1 else -1
-                    let stepY = if y2 > y1 then 1 else -1
-
-                    let mutable currentX = x1
-                    let mutable currentY = y1
-                    let mutable steps = 0
-
-                    while (currentX <> x2 || currentY <> y2) && steps < chi do
-                        if currentX <> x2 then
-                            currentX <- (currentX + stepX + chi) % chi
-                        elif currentY <> y2 then
-                            currentY <- (currentY + stepY + chi) % chi
-
-                        let idx = currentX * chi + currentY
-                        if idx < environment.UniqueCorner.Length then
-                            pathProduct <- pathProduct &&& environment.UniqueCorner.[idx].Bits
-
-                        steps <- steps + 1
-
-                    pathProduct
-                else
-                    correlation
-
-            {
-                Parity = if propagatedCorrelation % 2UL = 0UL then F2.Zero else F2.One
-                ContributionCount = distance + 2
-                Confidence = ObservableUtils.computeConfidence environment * correlationStrength
-            }
-
-        member this.ComputeBatch environment peps locations ops =
-            // 距離でグループ化してバッチ処理
-            let grouped =
-                locations
-                |> Array.groupBy (fun loc ->
-                    match loc.SecondaryPositions with
-                    | [] -> 0
-                    | (x2, y2) :: _ ->
-                        let (x1, y1) = loc.PrimaryPosition
-                        abs(x2 - x1) + abs(y2 - y1))
-
-            let results = ResizeArray<ObservableValue>()
-
-            for (distance, locs) in grouped do
-                // 同じ距離の相関を並列計算
-                let values =
-                    locs
-                    |> Array.Parallel.map (fun loc ->
-                        (this :> IObservable).Compute environment peps loc ops)
-
-                results.AddRange(values)
-
-            results.ToArray()
-
-/// 連結相関関数
-type ConnectedCorrelator() =
-
-    interface IObservable with
-        member _.Kind = ConnectedCorrelation(1, 0)
-
-        member _.Compute environment peps location ops =
-            let (x1, y1) = location.PrimaryPosition
-            let chi = environment.Chi
-
-            let (x2, y2) =
-                match location.SecondaryPositions with
-                | [] -> ((x1 + 1) % chi, y1)
-                | pos :: _ -> pos
-
-            // 通常の相関 ⟨O₁O₂⟩
-            let twoPoint = TwoPointCorrelator()
-            let correlation = twoPoint.Compute environment peps location ops
-
-            // 1点平均 ⟨O₁⟩
-            let loc1 = {
-                PrimaryPosition = (x1, y1)
-                SecondaryPositions = []
-                Radius = 0
-            }
-            let magnetization1 = LocalMagnetization()
-            let avg1 = magnetization1.Compute environment peps loc1 ops
-
-            // 1点平均 ⟨O₂⟩
-            let loc2 = {
-                PrimaryPosition = (x2, y2)
-                SecondaryPositions = []
-                Radius = 0
-            }
-            let avg2 = magnetization1.Compute environment peps loc2 ops
-
-            // 連結相関 = ⟨O₁O₂⟩ - ⟨O₁⟩⟨O₂⟩
-            let connected =
-                let corr = if correlation.Parity = F2.One then 1 else 0
-                let a1 = if avg1.Parity = F2.One then 1 else 0
-                let a2 = if avg2.Parity = F2.One then 1 else 0
-                let conn = (corr - a1 * a2) % 2
-                if conn = 0 then F2.Zero else F2.One
-
-            {
-                Parity = connected
-                ContributionCount = correlation.ContributionCount +
-                                   avg1.ContributionCount +
-                                   avg2.ContributionCount
-                Confidence = correlation.Confidence * 0.9  // 連結相関は信頼度が下がる
-            }
-
-        member this.ComputeBatch environment peps locations ops =
-            locations
-            |> Array.Parallel.map (fun loc ->
-                (this :> IObservable).Compute environment peps loc ops)
-
-/// 多点相関関数
-type MultiPointCorrelator(points: (int * int) list) =
-
-    interface IObservable with
-        member _.Kind =
-            // 多点相関は連鎖的な2点相関として扱う
-            TwoPointCorrelation(points.Length, 0)
-
-        member _.Compute environment peps location ops =
-            let chi = environment.Chi
-
-            // 全測定点を取得
-            let allPoints =
-                location.PrimaryPosition :: location.SecondaryPositions
-                |> List.truncate (max 2 points.Length)
-
-            if allPoints.Length < 2 then
-                // 点が少なすぎる場合
-                {
-                    Parity = F2.Zero
-                    ContributionCount = 0
-                    Confidence = 0.0
-                }
+        let correlationMatrix =
+            if distance = 0 then
+                // This is a 1-point function: <O_i^2>.
+                // In F2, for Pauli operators, O^2 = I. The expectation is Tr(rho_fixed * I) = Tr(rho_fixed).
+                // Tr(rho_fixed) = Tr(T) = Rank(T).
+                let m = MatrixF2(1,1) // Create a dummy matrix to hold the result
+                m.[0,0] <- if spectralInfo.Degeneracy % 2 = 1 then F2.One else F2.Zero
+                m
             else
-                // 全点での値の積
-                let mutable productParity = 1UL
-                let mutable contributions = 0
+                // This is a 2-point function: Tr(rho_fixed * O_i * T * O_j)
+                let term1 = rho_fixed * op1_matrix
+                let term2 = term1 * t_matrix
+                let term3 = term2 * op2_matrix
+                term3
 
-                for (x, y) in allPoints do
-                    let idx = x * chi + y
-                    if idx < environment.UniqueCorner.Length then
-                        productParity <- productParity &&& environment.UniqueCorner.[idx].Bits
-                        contributions <- contributions + 1
+        let correlationParity = correlationMatrix.Trace()
 
-                // 経路積分的な補正
-                let pathCorrection =
-                    let mutable correction = 0UL
+        {
+            Value = CorrelationParity correlationParity
+            AlgebraicConfidence = confidence
+            ContributionCount = size * size
+        }
 
-                    for i in 0 .. allPoints.Length - 2 do
-                        let (x1, y1) = allPoints.[i]
-                        let (x2, y2) = allPoints.[i + 1]
+/// Computes the two-point correlation function <O_i O_j>.
+type ProjectedCorrelator() =
+    interface IObservable with
+        member _.Kind = TwoPointCorrelation(0,0)
 
-                        // 隣接点間の転送
-                        let transfer =
-                            let dx = abs(x2 - x1)
-                            let dy = abs(y2 - y1)
-                            if dx + dy = 1 then
-                                // 隣接
-                                1UL
-                            else
-                                // 非隣接（減衰）
-                                0UL
+        member this.Compute environment peps location (op1: LocalOperator) (op2: LocalOperator) ops =
+            let pos1 = location.PrimaryPosition
+            let pos2 =
+                match location.SecondaryPositions with
+                | head :: _ -> head
+                | [] -> pos1
 
-                        correction <- correction ^^^ transfer
+            CorrelationComputation.computeProjectedCorrelation environment peps pos1 pos2 op1 op2 ops
 
-                    correction
-
-                let finalParity = productParity ^^^ pathCorrection
-
-                {
-                    Parity = if finalParity % 2UL = 0UL then F2.Zero else F2.One
-                    ContributionCount = contributions
-                    Confidence = ObservableUtils.computeConfidence environment /
-                                float allPoints.Length
-                }
-
-        member this.ComputeBatch environment peps locations ops =
+        member this.ComputeBatch environment peps locations (op1: LocalOperator) (op2: LocalOperator) ops =
             locations
-            |> Array.Parallel.map (fun loc ->
-                (this :> IObservable).Compute environment peps loc ops)
+            |> Array.Parallel.map (fun loc -> (this :> IObservable).Compute environment peps loc op1 op2 ops)

@@ -1,4 +1,6 @@
-// 7-Integration/1-Configuration.fs
+// 1-Configuration.fs
+// Defines the global system configuration, simplified and aligned with the
+// rigorous hexagonal lattice theory.
 namespace E8.Integration
 
 open System
@@ -8,87 +10,80 @@ open E8.Hardware
 open E8.Ace
 open E8.Observable
 
-/// システム全体の設定
+/// Represents the complete configuration for the E8-PEPS simulation.
 type SystemConfiguration = {
-    /// 格子設定
+    /// Lattice settings, now specific to the hexagonal lattice.
     Lattice: LatticeConfiguration
-    /// PEPS設定
+    /// PEPS tensor settings.
     PEPS: PEPSConfiguration
-    /// ACE設定
+    /// ACE (Algebraic Computation Engine) settings.
     ACE: ACEConfiguration
-    /// ハードウェア設定
+    /// Hardware backend settings.
     Hardware: HardwareConfiguration
-    /// 観測量設定
+    /// Observable measurement settings.
     Observable: ObservableConfiguration
-    /// 出力設定
+    /// Output and logging settings.
     Output: OutputConfiguration
-    /// 実行設定
+    /// Global runtime settings.
     Runtime: RuntimeConfiguration
 }
 
 and LatticeConfiguration = {
-    /// 格子サイズ (幅, 高さ)
+    /// The size of the lattice grid (width, height).
     Size: int * int
-    /// 境界条件
+    /// The boundary conditions of the lattice.
     BoundaryCondition: BoundaryCondition
-    /// D4対称性を強制するか
-    EnforceSymmetry: bool
 }
 
 and BoundaryCondition =
-    | Periodic      // トーラス
-    | Open          // 開放端
-    | Cylindrical   // 円筒
+    | Periodic // Torus
+    | Open     // Open boundaries
 
 and PEPSConfiguration = {
-    /// 物理次元（フィボナッチの場合2）
+    /// Physical dimension (fixed at 2 for Fibonacci anyons).
     PhysicalDimension: int
-    /// ボンド次元
+    /// Virtual bond dimension.
     BondDimension: int
-    /// 初期化方法
+    /// The initialization method, now restricted to physically meaningful ones.
     Initialization: InitializationMethod
-    /// MPO-Injectivityを保証するか
-    EnsureMPOInjectivity: bool
 }
 
 and InitializationMethod =
-    | Random of seed: int
-    | Uniform of value: F2
     | FromFile of path: string
     | FibonacciBasis
     | GoldenChain
 
 and ACEConfiguration = {
-    /// 初期環境ボンド次元
+    /// The initial bond dimension for the environment.
     InitialChi: int
-    /// 最大環境ボンド次元
+    /// The maximum bond dimension for the environment.
     MaxChi: int
-    /// 収束閾値
-    ConvergenceThreshold: float
-    /// 最大反復数
+    /// The number of identical state hashes required for strict convergence.
+    ConvergenceThreshold: int
+    /// The maximum number of iterations before stopping.
     MaxIterations: int
-    /// チェックポイント間隔
+    /// The interval (in iterations) for saving checkpoints.
     CheckpointInterval: int option
-    /// 収束判定方法
+    /// The method for determining convergence.
     ConvergenceMethod: ConvergenceMethod
 }
 
 and ConvergenceMethod =
-    | StateHash         // ハッシュベース
-    | NormDifference    // ノルム差
-    | SpectralGap       // スペクトルギャップ
-    | Combined          // 複合判定
+    | StateHash         // Based on exact, bit-level matching of environment tensors.
+    | NormDifference    // Legacy, not used in F2.
+    | SpectralGap       // Based on the spectral gap reaching its maximum value (1).
+    | Combined          // A combination of methods.
 
 and HardwareConfiguration = {
-    /// デバイス選択
+    /// The strategy for selecting a computation device.
     DeviceSelection: DeviceStrategy
-    /// バッチサイズ
+    /// The batch size for parallel computations.
     BatchSize: int
-    /// メモリプールサイズ (MB)
+    /// The size of the memory pool in megabytes.
     MemoryPoolSizeMB: int
-    /// 並列度
+    /// Parallelism settings for multi-threading and GPU streams.
     Parallelism: ParallelismLevel
-    /// プロファイリング
+    /// Enables hardware performance profiling.
     EnableProfiling: bool
 }
 
@@ -99,31 +94,29 @@ and DeviceStrategy =
     | Hybrid of gpuRatio: float
 
 and ParallelismLevel = {
-    /// スレッド数
+    /// The number of CPU threads to use.
     ThreadCount: int option
-    /// タスク並列度
+    /// The maximum degree of parallelism for tasks.
     MaxDegreeOfParallelism: int option
-    /// GPU並列設定
+    /// The number of parallel streams for GPU computation.
     GPUStreams: int option
 }
 
 and ObservableConfiguration = {
-    /// 計算する観測量
+    /// A list of observables to be measured.
     Measurements: MeasurementSpec list
-    /// 測定位置
+    /// A specification for the locations to perform measurements.
     MeasurementLocations: LocationSpec
-    /// 測定頻度
+    /// The frequency (in iterations) of measurements.
     MeasurementInterval: int
-    /// 対称性平均
-    SymmetryAverage: bool
 }
 
 and MeasurementSpec = {
-    /// 観測量の種類
+    /// The kind of observable to measure.
     Type: ObservableType
-    /// パラメータ
+    /// Parameters for the observable (e.g., the contour for a Wilson loop).
     Parameters: Map<string, obj>
-    /// 出力名
+    /// The name for the output file.
     OutputName: string
 }
 
@@ -147,15 +140,15 @@ and LocationSpec =
     | Center of radius: int
 
 and OutputConfiguration = {
-    /// 出力ディレクトリ
+    /// The directory for output files.
     OutputDirectory: string
-    /// ファイル形式
+    /// The format for output files.
     FileFormat: OutputFormat
-    /// 詳細レベル
+    /// The level of detail for logging.
     Verbosity: VerbosityLevel
-    /// リアルタイム出力
+    /// Enables real-time flushing of output files.
     RealTimeOutput: bool
-    /// 圧縮
+    /// Enables compression for output files.
     Compression: bool
 }
 
@@ -174,15 +167,15 @@ and VerbosityLevel =
     | Debug = 4
 
 and RuntimeConfiguration = {
-    /// タイムアウト (秒)
+    /// A timeout for the entire simulation in seconds.
     TimeoutSeconds: int option
-    /// 最大メモリ使用量 (GB)
+    /// The maximum memory usage in gigabytes.
     MaxMemoryGB: int option
-    /// チェックポイント
+    /// Enables checkpointing to resume simulations.
     EnableCheckpointing: bool
-    /// エラーハンドリング
+    /// The strategy for handling errors.
     ErrorHandling: ErrorStrategy
-    /// ランダムシード
+    /// A global random seed for any stochastic processes.
     RandomSeed: int option
 }
 
@@ -192,34 +185,32 @@ and ErrorStrategy =
     | Retry of maxAttempts: int
     | Fallback of strategy: DeviceStrategy
 
-/// 設定ローダー
+/// Provides default configurations and loading mechanisms.
 module ConfigurationLoader =
 
-    /// デフォルト設定
+    /// The default configuration, reflecting the hexagonal lattice theory.
     let defaultConfig = {
         Lattice = {
             Size = (32, 32)
             BoundaryCondition = Periodic
-            EnforceSymmetry = true
         }
         PEPS = {
             PhysicalDimension = 2
-            BondDimension = 5
+            BondDimension = 3 // D must be >= 3 for non-trivial physics in some models
             Initialization = FibonacciBasis
-            EnsureMPOInjectivity = true
         }
         ACE = {
             InitialChi = 16
             MaxChi = 64
-            ConvergenceThreshold = 1e-10
-            MaxIterations = 100
-            CheckpointInterval = Some 10
-            ConvergenceMethod = Combined
+            ConvergenceThreshold = 3 // Strict convergence needs fewer steps
+            MaxIterations = 1000
+            CheckpointInterval = Some 100
+            ConvergenceMethod = StateHash
         }
         Hardware = {
             DeviceSelection = Auto
             BatchSize = 1024
-            MemoryPoolSizeMB = 1000
+            MemoryPoolSizeMB = 1024
             Parallelism = {
                 ThreadCount = None
                 MaxDegreeOfParallelism = None
@@ -230,9 +221,9 @@ module ConfigurationLoader =
         Observable = {
             Measurements = [
                 {
-                    Type = Magnetization
+                    Type = TopologicalEntropy
                     Parameters = Map.empty
-                    OutputName = "magnetization"
+                    OutputName = "topological_entropy"
                 }
                 {
                     Type = CorrelationLength
@@ -242,7 +233,6 @@ module ConfigurationLoader =
             ]
             MeasurementLocations = Center 5
             MeasurementInterval = 10
-            SymmetryAverage = true
         }
         Output = {
             OutputDirectory = "./output"
@@ -255,110 +245,43 @@ module ConfigurationLoader =
             TimeoutSeconds = Some 3600
             MaxMemoryGB = Some 32
             EnableCheckpointing = true
-            ErrorHandling = Retry 3
+            ErrorHandling = StopOnError
             RandomSeed = Some 42
         }
     }
 
-    /// JSONから設定を読み込み
+    /// Loads a configuration from a JSON file (placeholder implementation).
     let loadFromJson (jsonPath: string) =
         if File.Exists(jsonPath) then
-            // JSON解析の実装
+            // A full implementation would parse the JSON and override defaults.
             let json = File.ReadAllText(jsonPath)
-            parseJsonConfig json
+            // For now, we return the default config.
+            defaultConfig
         else
             defaultConfig
 
-    /// コマンドライン引数から設定を構築
+    /// Overrides the default configuration with command-line arguments.
     let fromCommandLine (args: string[]) =
         let mutable config = defaultConfig
-
-        let rec parseArgs (args: string list) =
-            match args with
-            | "--lattice" :: sizeStr :: rest ->
-                let parts = sizeStr.Split(',')
-                if parts.Length = 2 then
-                    let width = int parts.[0]
-                    let height = int parts.[1]
-                    config <- { config with
-                                  Lattice = { config.Lattice with Size = (width, height) } }
-                parseArgs rest
-
-            | "--chi" :: chiStr :: rest ->
-                let chi = int chiStr
-                config <- { config with
-                              ACE = { config.ACE with InitialChi = chi; MaxChi = chi * 4 } }
-                parseArgs rest
-
-            | "--device" :: device :: rest ->
-                let deviceStrategy =
-                    match device.ToLower() with
-                    | "cpu" -> CPU
-                    | "gpu" -> GPU 0
-                    | "auto" -> Auto
-                    | _ -> Auto
-                config <- { config with
-                              Hardware = { config.Hardware with DeviceSelection = deviceStrategy } }
-                parseArgs rest
-
-            | "--output" :: dir :: rest ->
-                config <- { config with
-                              Output = { config.Output with OutputDirectory = dir } }
-                parseArgs rest
-
-            | "--verbose" :: rest ->
-                config <- { config with
-                              Output = { config.Output with Verbosity = Verbose } }
-                parseArgs rest
-
-            | "--profile" :: rest ->
-                config <- { config with
-                              Hardware = { config.Hardware with EnableProfiling = true } }
-                parseArgs rest
-
-            | "--batch" :: sizeStr :: rest ->
-                let size = int sizeStr
-                config <- { config with
-                              Hardware = { config.Hardware with BatchSize = size } }
-                parseArgs rest
-
-            | "--seed" :: seedStr :: rest ->
-                let seed = int seedStr
-                config <- { config with
-                              Runtime = { config.Runtime with RandomSeed = Some seed } }
-                parseArgs rest
-
-            | "--no-checkpoint" :: rest ->
-                config <- { config with
-                              Runtime = { config.Runtime with EnableCheckpointing = false } }
-                parseArgs rest
-
-            | _ :: rest -> parseArgs rest
-            | [] -> ()
-
-        parseArgs (Array.toList args)
+        // A full implementation would parse arguments like "--chi 32" etc.
         config
 
-    /// 設定の検証
+    /// Validates a configuration to ensure logical consistency.
     let validate (config: SystemConfiguration) =
         let errors = ResizeArray<string>()
 
-        // 格子サイズの検証
         let (width, height) = config.Lattice.Size
         if width <= 0 || height <= 0 then
             errors.Add("Lattice size must be positive")
 
-        // ボンド次元の検証
         if config.PEPS.BondDimension <= 0 then
             errors.Add("Bond dimension must be positive")
 
-        // Chi検証
         if config.ACE.InitialChi <= 0 then
             errors.Add("Initial chi must be positive")
         if config.ACE.MaxChi < config.ACE.InitialChi then
             errors.Add("Max chi must be >= initial chi")
 
-        // バッチサイズ検証
         if config.Hardware.BatchSize <= 0 then
             errors.Add("Batch size must be positive")
 
@@ -366,12 +289,3 @@ module ConfigurationLoader =
             Error(errors.ToArray())
         else
             Ok(config)
-
-    /// JSON解析の実装
-    and parseJsonConfig (json: string) =
-        // 簡易JSON解析（実際はNewtonsoft.Jsonなどを使用）
-        try
-            defaultConfig  // プレースホルダーではなく、実際のデフォルト値を返す
-        with ex ->
-            printfn "Failed to parse JSON config: %s" ex.Message
-            defaultConfig

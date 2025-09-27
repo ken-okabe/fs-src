@@ -29,10 +29,10 @@ module VectorF2Tests =
     let ``VectorF2 bounds checking`` () =
         let v = VectorF2(5)
 
-        Assert.Throws<IndexOutOfRangeException>(fun () -> v.[-1] |> ignore) |> ignore
-        Assert.Throws<IndexOutOfRangeException>(fun () -> v.[5] |> ignore) |> ignore
-        Assert.Throws<IndexOutOfRangeException>(fun () -> v.[-1] <- F2.One) |> ignore
-        Assert.Throws<IndexOutOfRangeException>(fun () -> v.[5] <- F2.One) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> v.[-1] |> ignore) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> v.[5] |> ignore) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> v.[-1] <- F2.One) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> v.[5] <- F2.One) |> ignore
 
     [<Fact>]
     let ``VectorF2 dot product`` () =
@@ -57,7 +57,7 @@ module VectorF2Tests =
         let v1 = VectorF2(3)
         let v2 = VectorF2(4)
 
-        Assert.Throws<ArgumentException>(fun () -> v1.Dot(v2) |> ignore) |> ignore
+        Assert.Throws<System.ArgumentException>(fun () -> v1.Dot(v2) |> ignore) |> ignore
 
     [<Fact>]
     let ``VectorF2 clone is independent`` () =
@@ -164,7 +164,7 @@ module MatrixF2Tests =
         let a = MatrixF2(2, 3)
         let b = MatrixF2(2, 3)
 
-        Assert.Throws<ArgumentException>(fun () -> a * b |> ignore) |> ignore
+        Assert.Throws<System.ArgumentException>(fun () -> a * b |> ignore) |> ignore
 
     [<Fact>]
     let ``MatrixF2 count non-zero`` () =
@@ -207,10 +207,10 @@ module Tensor3F2Tests =
     let ``Tensor3F2 bounds checking`` () =
         let t = Tensor3F2(2, 3, 4)
 
-        Assert.Throws<IndexOutOfRangeException>(fun () -> t.[-1, 0, 0] |> ignore) |> ignore
-        Assert.Throws<IndexOutOfRangeException>(fun () -> t.[2, 0, 0] |> ignore) |> ignore
-        Assert.Throws<IndexOutOfRangeException>(fun () -> t.[0, 3, 0] |> ignore) |> ignore
-        Assert.Throws<IndexOutOfRangeException>(fun () -> t.[0, 0, 4] |> ignore) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> t.[-1, 0, 0] |> ignore) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> t.[2, 0, 0] |> ignore) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> t.[0, 3, 0] |> ignore) |> ignore
+        Assert.Throws<System.IndexOutOfRangeException>(fun () -> t.[0, 0, 4] |> ignore) |> ignore
 
     [<Fact>]
     let ``Tensor3F2 clone is independent`` () =
@@ -228,6 +228,22 @@ module Tensor3F2Tests =
 
         Assert.Equal(F2.One, t1.[0, 0, 0])  // Original unchanged
         Assert.Equal(F2.Zero, t1.[0, 1, 0]) // Original unchanged
+
+module Tensor4F2Tests =
+
+    [<Fact>]
+    let ``Tensor4F2 can function as a hexagonal PEPS tensor`` () =
+        let t = Tensor4F2(2, 2, 2, 2) // Physical, Virtual1, Virtual2, Virtual3
+
+        Assert.Equal(2, t.D1) // Physical dimension
+        Assert.Equal(2, t.D2) // Virtual dimension 1
+        Assert.Equal(2, t.D3) // Virtual dimension 2
+        Assert.Equal(2, t.D4) // Virtual dimension 3
+        Assert.Equal(16, t.TotalElements)
+
+        t.[1, 0, 1, 0] <- F2.One
+        Assert.Equal(F2.One, t.[1, 0, 1, 0])
+        Assert.Equal(F2.Zero, t.[0, 0, 0, 0])
 
 module Tensor5F2Tests =
 
